@@ -1,7 +1,9 @@
 name: flutter_game_performance_utils
 description: Performance utilities for Flutter mobile games. Debouncing, throttling, asset caching, and Firebase connection management.
 version: 0.1.0
-homepage: https://github.com/yourusername/flutter_game_performance_utils
+homepage: https://github.com/fctpe/flutter_game_performance_utils
+repository: https://github.com/fctpe/flutter_game_performance_utils
+issue_tracker: https://github.com/fctpe/flutter_game_performance_utils/issues
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
