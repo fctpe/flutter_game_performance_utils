@@ -135,7 +135,14 @@ class FirebaseConnectionManager with WidgetsBindingObserver {
     if (_isPaused) return;
     _isPaused = true;
 
-    for (final entry in _activeSubscriptions.entries) {
+    // Iterate a snapshot, not the live map. `_pauseSubscription` removes the
+    // entry it just paused, and mutating a Map while iterating its entries
+    // throws ConcurrentModificationError on the next step — so with two or more
+    // registered subscriptions, backgrounding the app crashed instead of
+    // pausing anything. With exactly one it happened to work, which is why it
+    // survived: the failure needs a second connection to appear.
+    final snapshot = _activeSubscriptions.entries.toList(growable: false);
+    for (final entry in snapshot) {
       _pauseSubscription(entry.key, entry.value);
     }
   }
@@ -144,7 +151,30 @@ class FirebaseConnectionManager with WidgetsBindingObserver {
     if (!_isPaused) return;
     _isPaused = false;
 
-    _activeSubscriptions.addAll(_pausedSubscriptions);
+    // Actually resume the streams. This used to move the entries back into
+    // `_activeSubscriptions` and stop there, so every subscription stayed
+    // paused for the rest of the process: `activeConnectionCount` reported
+    // them as live, and no event was ever delivered again. A connection
+    // manager that never reconnects is worse than no connection manager,
+    // because the count says everything is fine.
+    final resumed = <String, StreamSubscription>{};
+    _pausedSubscriptions.forEach((id, subscription) {
+      try {
+        // `pause()` can nest; resume until the stream is genuinely listening
+        // again rather than assuming a single matching call.
+        while (subscription.isPaused) {
+          subscription.resume();
+        }
+        resumed[id] = subscription;
+      } catch (e) {
+        // Keep going: one dead subscription must not strand the others paused.
+        if (kDebugMode) {
+          print('[FirebaseConnectionManager] Error resuming $id: $e');
+        }
+      }
+    });
+
+    _activeSubscriptions.addAll(resumed);
     _pausedSubscriptions.clear();
   }
 
@@ -195,6 +225,13 @@ class FirebaseConnectionManager with WidgetsBindingObserver {
     manager._activeSubscriptions.clear();
     manager._pausedSubscriptions.clear();
     manager._isPaused = false;
+    // Both lifecycle flags, not just one. Clearing `_isPaused` while leaving
+    // `_isAppInBackground` set wedged the manager: a later background event
+    // early-returned (already backgrounded) so nothing paused, and a later
+    // foreground event early-returned inside `_resumeAllSubscriptions` (not
+    // paused) so nothing resumed. Cleanup has to leave the state coherent, and
+    // "half reset" is not a state the two handlers can recover from.
+    manager._isAppInBackground = false;
   }
 
   /// Dispose the connection manager
