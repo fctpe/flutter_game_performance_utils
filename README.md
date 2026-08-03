@@ -109,9 +109,17 @@ FirebaseConnectionManager.unregisterSubscription(subscription);
 ### GameAssetCacheService
 
 - `cacheAssets()` - Batch cache assets with progress
-- `getCacheStats()` - Get cache statistics
-- `clearCache()` - Clear all cached assets
+- `getCacheStats()` - Get cache statistics (cached *and* failed counts)
+- `failedAssetPaths` - Paths that failed to load on the last attempt
+- `clearCache()` - Clear cached and failed paths
 - `isAssetCached()` - Check if asset is cached
+
+A failed load is recorded as a failure, not a success. Worth stating, because it
+used to be the other way round: the whole batch was marked cached once it
+settled while the per-asset loader swallowed every error. A missing or typo'd
+path was counted as loaded, reported in the success log, and — since the cached
+set is what `cacheAssets` filters on — skipped on every later call, so it could
+never be retried.
 
 ### FirebaseConnectionManager
 
@@ -119,6 +127,7 @@ FirebaseConnectionManager.unregisterSubscription(subscription);
 - `registerSubscription()` - Track Firebase listener
 - `unregisterSubscription()` - Remove tracked listener
 - `cleanupAllConnections()` - Force cleanup all
+- `activeConnectionCount` / `isAppInBackground` - Current state
 - `getDebugInfo()` - Debug connection state
 
 ## Battery Optimization
@@ -134,6 +143,30 @@ The Firebase Connection Manager automatically pauses all registered Firestore/Re
 - All listeners paused automatically
 - Zero battery drain from Firebase when backgrounded
 - Seamless resume when app returns
+
+### What that promise actually cost to keep
+
+Three defects sat in exactly that path until they were tested, and they are
+listed here rather than quietly patched because each one made the manager
+*report* success while delivering nothing:
+
+- **Backgrounding crashed with two or more subscriptions.** The pause loop
+  iterated the live subscription map while the per-subscription pause removed
+  from it — `ConcurrentModificationError`. With exactly one registered
+  subscription it worked, which is the shape a quick manual check uses.
+- **Foregrounding never resumed anything.** Subscriptions were moved back into
+  the active map without `resume()` ever being called, so they stayed paused for
+  the life of the process while `activeConnectionCount` reported them live.
+- **`cleanupAllConnections()` left the state half-reset**, clearing the paused
+  flag but not the backgrounded one, after which neither handler could recover:
+  backgrounding early-returned as already-backgrounded, foregrounding
+  early-returned as not-paused.
+
+Separately, `debouncedPostFrameCallback` now calls `scheduleFrame()`.
+`addPostFrameCallback` registers work for the end of the next frame; it does not
+cause one. With no frame scheduled the callback waited on some unrelated
+repaint — and an idle app is precisely when a debounced callback fires.
+[`test/`](test) covers all four.
 
 ## Credits
 
