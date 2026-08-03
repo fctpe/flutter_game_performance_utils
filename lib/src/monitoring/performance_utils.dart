@@ -23,6 +23,14 @@ class PerformanceUtils {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         callback();
       });
+      // `addPostFrameCallback` registers a callback for the end of the *next*
+      // frame; it does not cause one to happen. Without this, a callback
+      // registered while the app is idle waits for some unrelated repaint —
+      // and "the app has gone quiet" is precisely when a debounced callback
+      // fires, so the common case was the one that stalled. In a busy UI
+      // something else schedules a frame and it looks fine, which is why this
+      // never showed up by hand.
+      WidgetsBinding.instance.scheduleFrame();
       _debouncers.remove(key);
     });
   }
